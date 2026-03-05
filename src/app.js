@@ -21,6 +21,13 @@ export function zappafiedApp() {
     decodedAudioBuffer: null,
     renderedSrc: null,
 
+    // Progress tracking
+    analysisProgress: 0,
+    analysisStage: '',
+    renderProgress: 0,
+    renderStage: '',
+    _renderId: 0,
+
     async handleFileUpload(event) {
       const file = event.target.files[0];
       if (!file || !file.type.startsWith('audio/')) {
@@ -66,8 +73,15 @@ export function zappafiedApp() {
     async startAnalysis() {
       if (this.isProcessing) return;
 
+      // Cancel any in-progress render — new analysis makes it stale
+      this._renderId++;
+      this.isRendering = false;
+      this.isAnalyzed = false;
+
       try {
         this.isProcessing = true;
+        this.analysisProgress = 0;
+        this.analysisStage = 'Fetching audio...';
 
         // Reset data but keep settings
         this.features = [];
@@ -81,9 +95,7 @@ export function zappafiedApp() {
           await this.audioContext.close();
           this.audioContext = null;
         }
-        if (this.offlineContext) {
-          this.offlineContext = null;
-        }
+        this.offlineContext = null;
 
         // Clear canvas
         const canvas = document.getElementById('visualizationCanvas');
@@ -93,19 +105,22 @@ export function zappafiedApp() {
         }
 
         // Fetch audio data
-        console.log('Fetching audio data...');
         const response = await fetch(this.audioSrc);
         if (!response.ok) {
           throw new Error(`Failed to fetch audio: ${response.statusText}`);
         }
+
+        this.analysisProgress = 10;
+        this.analysisStage = 'Loading audio...';
 
         const arrayBuffer = await response.arrayBuffer();
         if (!arrayBuffer || arrayBuffer.byteLength === 0) {
           throw new Error('Empty audio buffer received');
         }
 
-        // Decode audio
-        console.log('Decoding audio data...');
+        this.analysisProgress = 20;
+        this.analysisStage = 'Decoding audio...';
+
         const tempContext = new AudioContext();
         const audioBuffer = await tempContext.decodeAudioData(arrayBuffer);
         await tempContext.close();
@@ -113,8 +128,9 @@ export function zappafiedApp() {
         // Store for later mixing
         this.decodedAudioBuffer = audioBuffer;
 
-        // Process the audio in chunks
-        console.log('Processing audio...');
+        this.analysisProgress = 35;
+        this.analysisStage = 'Extracting pitch features...';
+
         const bufferSize = 2048;
         const sampleRate = audioBuffer.sampleRate;
         const totalSamples = audioBuffer.length;
@@ -122,6 +138,10 @@ export function zappafiedApp() {
         audioBuffer.copyFromChannel(channelData, 0);
 
         let features = [];
+        const totalChunks = Math.ceil(totalSamples / bufferSize);
+        let chunkIndex = 0;
+        const yieldEvery = Math.max(1, Math.floor(totalChunks / 20));
+
         for (let startSample = 0; startSample < totalSamples; startSample += bufferSize) {
           const endSample = Math.min(startSample + bufferSize, totalSamples);
           const chunkSize = Math.pow(2, Math.floor(Math.log2(endSample - startSample)));
@@ -140,21 +160,27 @@ export function zappafiedApp() {
             if (featureData && featureData.rms > this.noiseThreshold) {
               const frequency = this.calculatePitch(featureData.amplitudeSpectrum, sampleRate);
               if (frequency > 0) {
-                const time = startSample / sampleRate;
                 features.push({
                   pitch: frequency,
-                  time: time,
+                  time: startSample / sampleRate,
                   rms: featureData.rms
                 });
               }
             }
           } catch (featureError) {
             console.warn('Error processing chunk at', startSample, featureError);
-            continue;
+          }
+
+          chunkIndex++;
+          // Yield to browser periodically so the progress bar actually updates
+          if (chunkIndex % yieldEvery === 0) {
+            this.analysisProgress = 35 + Math.round((chunkIndex / totalChunks) * 40);
+            await new Promise(resolve => setTimeout(resolve, 0));
           }
         }
 
-        console.log(`Analysis complete. Found ${features.length} features`);
+        this.analysisProgress = 75;
+        this.analysisStage = 'Processing notes...';
 
         if (features.length > 0) {
           const pitches = features.map(f => f.pitch);
@@ -177,24 +203,32 @@ export function zappafiedApp() {
           });
         }
 
-        this.features = features.sort((a, b) => a.time - b.time);
+        this.analysisProgress = 85;
+        this.analysisStage = 'Generating MIDI...';
 
+        this.features = features.sort((a, b) => a.time - b.time);
         this.features.forEach(feature => {
           this.generateMIDI(feature.pitch, feature.time, feature.rms);
         });
 
         console.log(`Generated ${this.midiData.length} MIDI notes`);
 
+        this.analysisProgress = 95;
         this.drawVisualization();
+
+        this.analysisProgress = 100;
+        this.analysisStage = 'Analysis complete';
+
+        // Analysis is done — decouple from rendering
+        this.isProcessing = false;
         this.isAnalyzed = true;
 
-        // Render MIDI + original audio into a single mixed track
-        await this.renderMixedAudio();
+        // Kick off render without blocking; it manages its own isRendering state
+        this.renderMixedAudio();
 
       } catch (error) {
         console.error('Error analyzing audio:', error);
         alert(`Analysis failed: ${error.message}`);
-      } finally {
         this.isProcessing = false;
       }
     },
@@ -207,17 +241,25 @@ export function zappafiedApp() {
         return;
       }
 
+      // Version stamp — lets us detect when a newer render has been requested
+      const renderId = ++this._renderId;
+
       this.isRendering = true;
+      this.renderProgress = 0;
+      this.renderStage = 'Loading synth...';
+
       try {
         const Tone = await getTone();
+        if (renderId !== this._renderId) return;
+
+        this.renderProgress = 15;
+        this.renderStage = 'Rendering MIDI synth...';
+
         const duration = this.decodedAudioBuffer.duration;
         const sampleRate = this.decodedAudioBuffer.sampleRate;
         const midiData = this.midiData;
         const instrument = parseInt(this.midiInstrument);
 
-        console.log('Rendering MIDI synth offline...');
-
-        // Render the MIDI synth to an AudioBuffer using Tone.Offline
         const synthToneBuffer = await Tone.Offline(({ transport }) => {
           let synth;
           if (instrument >= 9 && instrument <= 16) {
@@ -242,10 +284,13 @@ export function zappafiedApp() {
           transport.start();
         }, duration + 1, 2, sampleRate);
 
-        const synthAudioBuffer = synthToneBuffer.get();
-        console.log('MIDI render complete. Mixing with original audio...');
+        if (renderId !== this._renderId) return;
 
-        // Mix original + synth in an OfflineAudioContext
+        this.renderProgress = 60;
+        this.renderStage = 'Mixing audio...';
+
+        const synthAudioBuffer = synthToneBuffer.get();
+
         const numChannels = this.decodedAudioBuffer.numberOfChannels;
         const totalLength = this.decodedAudioBuffer.length;
         const mixCtx = new OfflineAudioContext(numChannels, totalLength, sampleRate);
@@ -255,9 +300,7 @@ export function zappafiedApp() {
         origSource.connect(mixCtx.destination);
         origSource.start(0);
 
-        // Resample synth buffer if needed, otherwise connect directly
         const synthSource = mixCtx.createBufferSource();
-        // Build a buffer that matches the original's channel count and length
         const synthMono = mixCtx.createBuffer(numChannels, totalLength, sampleRate);
         for (let ch = 0; ch < numChannels; ch++) {
           const synthCh = ch < synthAudioBuffer.numberOfChannels
@@ -268,7 +311,6 @@ export function zappafiedApp() {
           dest.set(synthCh.subarray(0, copyLen));
         }
 
-        // Slight gain reduction on synth to blend with original
         const synthGain = mixCtx.createGain();
         synthGain.gain.value = 0.6;
         synthSource.buffer = synthMono;
@@ -277,25 +319,35 @@ export function zappafiedApp() {
         synthSource.start(0);
 
         const mixedBuffer = await mixCtx.startRendering();
-        console.log('Mix complete. Encoding WAV...');
+        if (renderId !== this._renderId) return;
+
+        this.renderProgress = 85;
+        this.renderStage = 'Encoding WAV...';
 
         const wavBuffer = this.encodeWAV(mixedBuffer);
         const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+
+        if (renderId !== this._renderId) return;
 
         if (this.renderedSrc) URL.revokeObjectURL(this.renderedSrc);
         this.renderedSrc = URL.createObjectURL(blob);
 
         const audioPlayer = document.getElementById('audioPlayer');
         audioPlayer.src = this.renderedSrc;
-        console.log('Ready for playback.');
+
+        this.renderProgress = 100;
+        this.renderStage = 'Ready';
 
       } catch (error) {
-        console.error('Error rendering mixed audio:', error);
-        // Fallback to original audio
-        const audioPlayer = document.getElementById('audioPlayer');
-        audioPlayer.src = this.audioSrc;
+        if (renderId === this._renderId) {
+          console.error('Error rendering mixed audio:', error);
+          const audioPlayer = document.getElementById('audioPlayer');
+          audioPlayer.src = this.audioSrc;
+        }
       } finally {
-        this.isRendering = false;
+        if (renderId === this._renderId) {
+          this.isRendering = false;
+        }
       }
     },
 
