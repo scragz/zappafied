@@ -11,13 +11,15 @@ export function zappafiedApp() {
     features: [],
     midiData: [],
     isProcessing: false,
+    isRendering: false,
     isReady: false,
     isAnalyzed: false,
     noiseThreshold: 0.02,
     quantizeLevel: "16",
     pitchSmoothing: 50,
     midiInstrument: "1",
-    currentSynth: null,
+    decodedAudioBuffer: null,
+    renderedSrc: null,
 
     async handleFileUpload(event) {
       const file = event.target.files[0];
@@ -30,11 +32,6 @@ export function zappafiedApp() {
       this.audioSrc = URL.createObjectURL(file);
       this.isReady = true;
 
-      // Set up audio player
-      const audioPlayer = document.getElementById('audioPlayer');
-      audioPlayer.src = this.audioSrc;
-
-      // Pre-load Tone.js but don't initialize synth yet
       try {
         await getTone();
       } catch (error) {
@@ -46,7 +43,12 @@ export function zappafiedApp() {
       this.features = [];
       this.midiData = [];
       this.isAnalyzed = false;
+      this.decodedAudioBuffer = null;
 
+      if (this.renderedSrc) {
+        URL.revokeObjectURL(this.renderedSrc);
+        this.renderedSrc = null;
+      }
       if (this.audioContext) {
         this.audioContext.close();
         this.audioContext = null;
@@ -67,32 +69,14 @@ export function zappafiedApp() {
       try {
         this.isProcessing = true;
 
-        // Stop any current playback and cleanup
-        const audioPlayer = document.getElementById('audioPlayer');
-        if (audioPlayer) {
-          audioPlayer.pause();
-          audioPlayer.currentTime = 0;
-        }
-
-        // Stop Tone.js and cleanup synth
-        try {
-          const Tone = await getTone();
-          Tone.Transport.stop();
-          Tone.Transport.cancel();
-
-          if (this.currentSynth) {
-            const synth = this.currentSynth;
-            this.currentSynth = null;
-            try { synth.releaseAll(); } catch (e) {}
-            try { synth.dispose(); } catch (e) {}
-          }
-        } catch (error) {
-          console.warn('Error stopping Tone.js:', error);
-        }
-
         // Reset data but keep settings
         this.features = [];
         this.midiData = [];
+        this.decodedAudioBuffer = null;
+        if (this.renderedSrc) {
+          URL.revokeObjectURL(this.renderedSrc);
+          this.renderedSrc = null;
+        }
         if (this.audioContext) {
           await this.audioContext.close();
           this.audioContext = null;
@@ -120,27 +104,18 @@ export function zappafiedApp() {
           throw new Error('Empty audio buffer received');
         }
 
-        // Create temporary context for decoding
+        // Decode audio
         console.log('Decoding audio data...');
         const tempContext = new AudioContext();
         const audioBuffer = await tempContext.decodeAudioData(arrayBuffer);
         await tempContext.close();
 
-        console.log('Creating offline context...');
-        this.offlineContext = new OfflineAudioContext({
-          numberOfChannels: audioBuffer.numberOfChannels,
-          length: audioBuffer.length,
-          sampleRate: audioBuffer.sampleRate
-        });
-
-        const source = this.offlineContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.offlineContext.destination);
-        source.start();
+        // Store for later mixing
+        this.decodedAudioBuffer = audioBuffer;
 
         // Process the audio in chunks
         console.log('Processing audio...');
-        const bufferSize = 2048; // Must be power of 2
+        const bufferSize = 2048;
         const sampleRate = audioBuffer.sampleRate;
         const totalSamples = audioBuffer.length;
         const channelData = new Float32Array(audioBuffer.length);
@@ -149,9 +124,8 @@ export function zappafiedApp() {
         let features = [];
         for (let startSample = 0; startSample < totalSamples; startSample += bufferSize) {
           const endSample = Math.min(startSample + bufferSize, totalSamples);
-          // Ensure chunk size is power of 2
           const chunkSize = Math.pow(2, Math.floor(Math.log2(endSample - startSample)));
-          if (chunkSize < 64) continue; // Skip chunks that are too small
+          if (chunkSize < 64) continue;
 
           const chunk = channelData.slice(startSample, startSample + chunkSize);
           if (chunk.length === 0) continue;
@@ -182,9 +156,7 @@ export function zappafiedApp() {
 
         console.log(`Analysis complete. Found ${features.length} features`);
 
-        // After feature extraction, before MIDI generation:
         if (features.length > 0) {
-          // Apply pitch smoothing
           const pitches = features.map(f => f.pitch);
           const smoothedPitches = this.smoothPitch(pitches);
           features = features.map((f, i) => ({
@@ -192,13 +164,11 @@ export function zappafiedApp() {
             pitch: smoothedPitches[i]
           }));
 
-          // Apply quantization
           features = features.map(f => ({
             ...f,
             time: this.quantizeTime(f.time)
           }));
 
-          // Remove duplicates after quantization
           features = features.filter((f, i, arr) => {
             if (i === 0) return true;
             const prev = arr[i - 1];
@@ -207,22 +177,19 @@ export function zappafiedApp() {
           });
         }
 
-        console.log(`Analysis complete. Found ${features.length} features`);
-
-        // Sort features by time and add to instance
         this.features = features.sort((a, b) => a.time - b.time);
 
-        // Generate MIDI data
         this.features.forEach(feature => {
           this.generateMIDI(feature.pitch, feature.time, feature.rms);
         });
 
         console.log(`Generated ${this.midiData.length} MIDI notes`);
 
-        // Update visualization and state
         this.drawVisualization();
         this.isAnalyzed = true;
-        this.setupPlayback();
+
+        // Render MIDI + original audio into a single mixed track
+        await this.renderMixedAudio();
 
       } catch (error) {
         console.error('Error analyzing audio:', error);
@@ -232,105 +199,150 @@ export function zappafiedApp() {
       }
     },
 
-    setupPlayback() {
-      const audioPlayer = document.getElementById('audioPlayer');
-      const newAudioPlayer = audioPlayer.cloneNode(true);
-      audioPlayer.parentNode.replaceChild(newAudioPlayer, audioPlayer);
+    async renderMixedAudio() {
+      if (!this.decodedAudioBuffer || !this.midiData.length) {
+        // Nothing to mix — just play original
+        const audioPlayer = document.getElementById('audioPlayer');
+        audioPlayer.src = this.audioSrc;
+        return;
+      }
 
-      const disposeSynth = async () => {
+      this.isRendering = true;
+      try {
         const Tone = await getTone();
-        Tone.Transport.stop();
-        Tone.Transport.cancel();
-        if (this.currentSynth) {
-          const synth = this.currentSynth;
-          this.currentSynth = null;
-          try { synth.releaseAll(); } catch (e) {}
-          try { synth.dispose(); } catch (e) {}
+        const duration = this.decodedAudioBuffer.duration;
+        const sampleRate = this.decodedAudioBuffer.sampleRate;
+        const midiData = this.midiData;
+        const instrument = parseInt(this.midiInstrument);
+
+        console.log('Rendering MIDI synth offline...');
+
+        // Render the MIDI synth to an AudioBuffer using Tone.Offline
+        const synthToneBuffer = await Tone.Offline(({ transport }) => {
+          let synth;
+          if (instrument >= 9 && instrument <= 16) {
+            synth = new Tone.PolySynth(Tone.MetalSynth).toDestination();
+          } else {
+            synth = new Tone.PolySynth(Tone.Synth, {
+              envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 }
+            }).toDestination();
+          }
+
+          midiData.forEach(event => {
+            transport.schedule((time) => {
+              synth.triggerAttackRelease(
+                Tone.Frequency(event.note, "midi").toFrequency(),
+                "8n",
+                time,
+                event.velocity ? event.velocity / 127 : 0.7
+              );
+            }, event.time);
+          });
+
+          transport.start();
+        }, duration + 1, 2, sampleRate);
+
+        const synthAudioBuffer = synthToneBuffer.get();
+        console.log('MIDI render complete. Mixing with original audio...');
+
+        // Mix original + synth in an OfflineAudioContext
+        const numChannels = this.decodedAudioBuffer.numberOfChannels;
+        const totalLength = this.decodedAudioBuffer.length;
+        const mixCtx = new OfflineAudioContext(numChannels, totalLength, sampleRate);
+
+        const origSource = mixCtx.createBufferSource();
+        origSource.buffer = this.decodedAudioBuffer;
+        origSource.connect(mixCtx.destination);
+        origSource.start(0);
+
+        // Resample synth buffer if needed, otherwise connect directly
+        const synthSource = mixCtx.createBufferSource();
+        // Build a buffer that matches the original's channel count and length
+        const synthMono = mixCtx.createBuffer(numChannels, totalLength, sampleRate);
+        for (let ch = 0; ch < numChannels; ch++) {
+          const synthCh = ch < synthAudioBuffer.numberOfChannels
+            ? synthAudioBuffer.getChannelData(ch)
+            : synthAudioBuffer.getChannelData(0);
+          const dest = synthMono.getChannelData(ch);
+          const copyLen = Math.min(synthCh.length, dest.length);
+          dest.set(synthCh.subarray(0, copyLen));
+        }
+
+        // Slight gain reduction on synth to blend with original
+        const synthGain = mixCtx.createGain();
+        synthGain.gain.value = 0.6;
+        synthSource.buffer = synthMono;
+        synthSource.connect(synthGain);
+        synthGain.connect(mixCtx.destination);
+        synthSource.start(0);
+
+        const mixedBuffer = await mixCtx.startRendering();
+        console.log('Mix complete. Encoding WAV...');
+
+        const wavBuffer = this.encodeWAV(mixedBuffer);
+        const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+
+        if (this.renderedSrc) URL.revokeObjectURL(this.renderedSrc);
+        this.renderedSrc = URL.createObjectURL(blob);
+
+        const audioPlayer = document.getElementById('audioPlayer');
+        audioPlayer.src = this.renderedSrc;
+        console.log('Ready for playback.');
+
+      } catch (error) {
+        console.error('Error rendering mixed audio:', error);
+        // Fallback to original audio
+        const audioPlayer = document.getElementById('audioPlayer');
+        audioPlayer.src = this.audioSrc;
+      } finally {
+        this.isRendering = false;
+      }
+    },
+
+    encodeWAV(audioBuffer) {
+      const numChannels = audioBuffer.numberOfChannels;
+      const sampleRate = audioBuffer.sampleRate;
+      const numSamples = audioBuffer.length;
+      const bitDepth = 16;
+      const bytesPerSample = bitDepth / 8;
+      const blockAlign = numChannels * bytesPerSample;
+      const byteRate = sampleRate * blockAlign;
+      const dataSize = numSamples * numChannels * bytesPerSample;
+
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+
+      const writeString = (offset, str) => {
+        for (let i = 0; i < str.length; i++) {
+          view.setUint8(offset + i, str.charCodeAt(i));
         }
       };
 
-      const scheduleNotes = async (startFromTime) => {
-        const Tone = await getTone();
-        await Tone.start();
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true); // PCM
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitDepth, true);
+      writeString(36, 'data');
+      view.setUint32(40, dataSize, true);
 
-        // Cancel any previously scheduled Transport events
-        Tone.Transport.stop();
-        Tone.Transport.cancel();
-
-        // Dispose existing synth to avoid InvalidStateError from stale audio nodes
-        if (this.currentSynth) {
-          const oldSynth = this.currentSynth;
-          this.currentSynth = null;
-          try { oldSynth.releaseAll(); } catch (e) {}
-          try { oldSynth.dispose(); } catch (e) {}
+      // Interleave channels and write as 16-bit PCM
+      let offset = 44;
+      for (let i = 0; i < numSamples; i++) {
+        for (let ch = 0; ch < numChannels; ch++) {
+          const sample = Math.max(-1, Math.min(1, audioBuffer.getChannelData(ch)[i]));
+          view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+          offset += 2;
         }
+      }
 
-        // Create fresh synth with clean audio nodes
-        const synthType = parseInt(this.midiInstrument);
-        if (synthType >= 9 && synthType <= 16) {
-          this.currentSynth = new Tone.PolySynth(Tone.MetalSynth).toDestination();
-        } else {
-          this.currentSynth = new Tone.PolySynth(Tone.Synth, {
-            envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 }
-          }).toDestination();
-        }
-
-        // Capture synth ref so callbacks can detect stale synths
-        const synth = this.currentSynth;
-
-        this.midiData.forEach(event => {
-          if (event.time >= startFromTime) {
-            Tone.Transport.scheduleOnce((time) => {
-              if (synth === this.currentSynth && this.currentSynth) {
-                try {
-                  this.currentSynth.triggerAttackRelease(
-                    Tone.Frequency(event.note, "midi").toFrequency(),
-                    "8n",
-                    time,
-                    event.velocity ? event.velocity / 127 : 0.7
-                  );
-                } catch (e) {
-                  console.warn('Error playing note:', event.note, e);
-                }
-              }
-            }, event.time - startFromTime);
-          }
-        });
-
-        Tone.Transport.start();
-      };
-
-      newAudioPlayer.addEventListener('play', async () => {
-        try {
-          await scheduleNotes(newAudioPlayer.currentTime);
-        } catch (error) {
-          console.error('Error during MIDI playback:', error);
-        }
-      });
-
-      newAudioPlayer.addEventListener('pause', async () => {
-        try {
-          const Tone = await getTone();
-          Tone.Transport.pause();
-          if (this.currentSynth) {
-            try { this.currentSynth.releaseAll(); } catch (e) {}
-          }
-        } catch (e) {}
-      });
-
-      newAudioPlayer.addEventListener('seeked', async () => {
-        if (!newAudioPlayer.paused) {
-          try {
-            await scheduleNotes(newAudioPlayer.currentTime);
-          } catch (error) {
-            console.error('Error rescheduling after seek:', error);
-          }
-        }
-      });
-
-      newAudioPlayer.addEventListener('ended', () => { disposeSynth(); });
-
-      window.addEventListener('beforeunload', () => { disposeSynth(); });
+      return buffer;
     },
 
     calculatePitch(spectrum, sampleRate) {
@@ -341,7 +353,6 @@ export function zappafiedApp() {
         let maxIndex = 0;
         let maxValue = 0;
 
-        // Find the peak frequency
         for (let i = 0; i < spectrum.length; i++) {
           if (spectrum[i] > maxValue) {
             maxValue = spectrum[i];
@@ -349,10 +360,7 @@ export function zappafiedApp() {
           }
         }
 
-        // Convert bin index to frequency
         const frequency = maxIndex * binSize;
-
-        // Only return frequencies in the vocal range (roughly 80-1000 Hz)
         return (frequency >= 80 && frequency <= 1000) ? frequency : 0;
       } catch (error) {
         console.warn('Error calculating pitch:', error);
@@ -361,11 +369,9 @@ export function zappafiedApp() {
     },
 
     generateMIDI(pitch, time, velocity) {
-      // Convert frequency to MIDI with proper rounding
       const midiNote = Math.round(69 + 12 * Math.log2(pitch / 440));
 
-      // Ensure MIDI note is within valid range and not a duplicate
-      if (midiNote >= 21 && midiNote <= 108) { // Standard piano range
+      if (midiNote >= 21 && midiNote <= 108) {
         const lastNote = this.midiData[this.midiData.length - 1];
         if (!lastNote ||
             lastNote.note !== midiNote ||
@@ -387,11 +393,9 @@ export function zappafiedApp() {
         return;
       }
 
-      // Force minimum canvas dimensions if not set by CSS
       const minWidth = 600;
       const minHeight = 400;
 
-      // Set canvas size to match its display size or minimum dimensions
       const rect = canvas.parentElement.getBoundingClientRect();
       canvas.width = Math.max(rect.width || minWidth, minWidth);
       canvas.height = Math.max(rect.height || minHeight, minHeight);
@@ -400,35 +404,21 @@ export function zappafiedApp() {
       const width = canvas.width;
       const height = canvas.height;
 
-      console.log('Canvas dimensions set to:', width, height);
-
-      // Clear canvas
       ctx.fillStyle = 'white';
       ctx.fillRect(0, 0, width, height);
 
-      // Calculate scaling factors
       const duration = this.features[this.features.length - 1].time;
       const pitchValues = this.features.map(f => f.pitch);
       const minPitch = Math.min(...pitchValues);
       const maxPitch = Math.max(...pitchValues);
       const pitchRange = maxPitch - minPitch || 1;
 
-      // Set margins
-      const margin = {
-        left: 60,
-        right: 20,
-        top: 20,
-        bottom: 40
-      };
-
+      const margin = { left: 60, right: 20, top: 20, bottom: 40 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
 
-      // Draw grid
       ctx.strokeStyle = '#eee';
       ctx.lineWidth = 0.5;
-
-      // Vertical grid lines
       for (let i = 0; i <= 10; i++) {
         const x = margin.left + (plotWidth * i / 10);
         ctx.beginPath();
@@ -436,8 +426,6 @@ export function zappafiedApp() {
         ctx.lineTo(x, height - margin.bottom);
         ctx.stroke();
       }
-
-      // Horizontal grid lines
       for (let i = 0; i <= 10; i++) {
         const y = margin.top + (plotHeight * i / 10);
         ctx.beginPath();
@@ -446,36 +434,26 @@ export function zappafiedApp() {
         ctx.stroke();
       }
 
-      // Draw axes
       ctx.strokeStyle = '#000';
       ctx.lineWidth = 2;
-
-      // Y-axis
       ctx.beginPath();
       ctx.moveTo(margin.left, margin.top);
       ctx.lineTo(margin.left, height - margin.bottom);
       ctx.stroke();
-
-      // X-axis
       ctx.beginPath();
       ctx.moveTo(margin.left, height - margin.bottom);
       ctx.lineTo(width - margin.right, height - margin.bottom);
       ctx.stroke();
 
-      // Plot points
       this.features.forEach((feature, i) => {
-        // Scale coordinates to plot area
         const x = margin.left + (plotWidth * feature.time / duration);
         const y = (height - margin.bottom) - (plotHeight * (feature.pitch - minPitch) / pitchRange);
-
         const radius = Math.max(3, feature.rms * 15);
 
-        // Draw connection to previous point
         if (i > 0) {
           const prev = this.features[i - 1];
           const prevX = margin.left + (plotWidth * prev.time / duration);
           const prevY = (height - margin.bottom) - (plotHeight * (prev.pitch - minPitch) / pitchRange);
-
           ctx.beginPath();
           ctx.moveTo(prevX, prevY);
           ctx.lineTo(x, y);
@@ -484,26 +462,20 @@ export function zappafiedApp() {
           ctx.stroke();
         }
 
-        // Draw point
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, 2 * Math.PI);
         ctx.fillStyle = `hsla(${(feature.pitch % 12) * 30}, 70%, 50%, 0.8)`;
         ctx.fill();
       });
 
-      // Draw axis labels
       ctx.fillStyle = 'black';
       ctx.font = '12px Arial';
-
-      // Y-axis labels (frequency)
       for (let i = 0; i <= 5; i++) {
         const pitch = minPitch + (pitchRange * i / 5);
         const y = margin.top + plotHeight * (1 - i / 5);
         ctx.textAlign = 'right';
         ctx.fillText(Math.round(pitch) + 'Hz', margin.left - 5, y + 4);
       }
-
-      // X-axis labels (time)
       for (let i = 0; i <= 5; i++) {
         const time = (duration * i / 5);
         const x = margin.left + plotWidth * (i / 5);
@@ -521,23 +493,20 @@ export function zappafiedApp() {
       getTone().then(Tone => {
         const track = new MidiWriter.Track();
 
-        // Add track name and instrument
         track.addEvent([
           new MidiWriter.ProgramChangeEvent({instrument: parseInt(this.midiInstrument)}),
           new MidiWriter.TrackNameEvent({text: 'Zappafied Voice'})
         ]);
 
-        // Convert time-based events to ticks with proper duration
         const ticksPerBeat = 128;
-        const beatsPerSecond = 2; // Assuming 120 BPM
+        const beatsPerSecond = 2;
 
-        this.midiData.forEach((event, index) => {
+        this.midiData.forEach((event) => {
           const startTick = Math.round(event.time * ticksPerBeat * beatsPerSecond);
-          const duration = '8'; // eighth note duration
 
           const note = new MidiWriter.NoteEvent({
             pitch: [Tone.Frequency(event.note, "midi").toNote()],
-            duration: duration,
+            duration: '8',
             startTick: startTick,
             velocity: event.velocity
           });
@@ -557,24 +526,6 @@ export function zappafiedApp() {
         console.error('Error exporting MIDI:', error);
         alert('An error occurred while exporting MIDI.');
       });
-    },
-
-    deleteNote(index) {
-      this.midiData.splice(index, 1);
-      this.drawVisualization();
-    },
-
-    async updateNoteDisplay() {
-      try {
-        const Tone = await getTone();
-        const notesList = document.querySelectorAll('[x-text^="Tone.Frequency"]');
-        notesList.forEach(noteElement => {
-          const note = parseInt(noteElement.getAttribute('data-note'));
-          noteElement.textContent = Tone.Frequency(note, "midi").toNote();
-        });
-      } catch (error) {
-        console.error('Error updating note display:', error);
-      }
     },
 
     smoothPitch(pitches) {
@@ -597,10 +548,8 @@ export function zappafiedApp() {
     quantizeTime(time) {
       if (this.quantizeLevel === "0") return time;
 
-      const quarterNote = 60 / 120; // Assuming 120 BPM
+      const quarterNote = 60 / 120;
       const division = parseInt(this.quantizeLevel);
-      // division is the note denominator (8 = 1/8 note, 16 = 1/16 note, etc.)
-      // 1/8 note = quarterNote/2, 1/16 = quarterNote/4, 1/32 = quarterNote/8
       const gridSize = (4 * quarterNote) / division;
 
       return Math.round(time / gridSize) * gridSize;
