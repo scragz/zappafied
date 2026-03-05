@@ -5,6 +5,7 @@ import { getTone } from './lib/tone-setup';
 export function zappafiedApp() {
   return {
     audioSrc: null,
+    audioFile: null,
     audioContext: null,
     offlineContext: null,
     source: null,
@@ -36,6 +37,7 @@ export function zappafiedApp() {
       }
 
       this.resetData();
+      this.audioFile = file;
       this.audioSrc = URL.createObjectURL(file);
       this.isReady = true;
 
@@ -51,6 +53,7 @@ export function zappafiedApp() {
       this.midiData = [];
       this.isAnalyzed = false;
       this.decodedAudioBuffer = null;
+      this.audioFile = null;
 
       if (this.renderedSrc) {
         URL.revokeObjectURL(this.renderedSrc);
@@ -104,16 +107,11 @@ export function zappafiedApp() {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
-        // Fetch audio data
-        const response = await fetch(this.audioSrc);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch audio: ${response.statusText}`);
-        }
-
+        // Read audio data directly from the File object to avoid blob URL fetch issues on mobile
         this.analysisProgress = 10;
         this.analysisStage = 'Loading audio...';
 
-        const arrayBuffer = await response.arrayBuffer();
+        const arrayBuffer = await this.audioFile.arrayBuffer();
         if (!arrayBuffer || arrayBuffer.byteLength === 0) {
           throw new Error('Empty audio buffer received');
         }
