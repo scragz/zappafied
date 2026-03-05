@@ -21,6 +21,8 @@ Zappafied is a powerful, browser-based tool designed to transform your vocal aud
     - [MIDI Playback](#midi-playback)
     - [Editing Detected Notes](#editing-detected-notes)
     - [Exporting MIDI](#exporting-midi)
+  - [Deployment](#deployment)
+    - [Deploying to Cloudflare Workers](#deploying-to-cloudflare-workers)
   - [Limitations](#limitations)
   - [Future Enhancements](#future-enhancements)
 
@@ -110,6 +112,60 @@ Zappafied is built using a modern tech stack to ensure performance, scalability,
 
 1. **Export MIDI Button**: After refining your notes, click the "Export MIDI" button to download the generated MIDI file.
 2. **Download and Use**: Save the `.mid` file to your device for use in other music applications or for sharing.
+
+## Deployment
+
+### Deploying to Cloudflare Workers
+
+Zappafied can be deployed as a static site using [Cloudflare Workers](https://workers.cloudflare.com/) with asset uploads via [Wrangler](https://developers.cloudflare.com/workers/wrangler/).
+
+**Prerequisites**
+
+1. Install Wrangler (if not already installed):
+
+   ```bash
+   npm install -g wrangler
+   ```
+
+2. Authenticate with Cloudflare:
+
+   ```bash
+   npx wrangler login
+   ```
+
+3. Build the project:
+
+   ```bash
+   npm run build
+   ```
+
+**Option 1: Deploy via command line**
+
+Upload the built assets directly by specifying the output directory:
+
+```bash
+npx wrangler versions upload --assets=./dist
+```
+
+**Option 2: Deploy via `wrangler.jsonc`**
+
+Create a `wrangler.jsonc` file in the project root with the following content:
+
+```jsonc
+{
+  "name": "zappafied",
+  "compatibility_date": "2026-03-05",
+  "assets": {
+    "directory": "./dist"
+  }
+}
+```
+
+Then deploy with:
+
+```bash
+npx wrangler versions upload
+```
 
 ## Limitations
 
