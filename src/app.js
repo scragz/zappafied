@@ -6,6 +6,7 @@ export function zappafiedApp() {
   return {
     audioSrc: null,
     audioFile: null,
+    audioArrayBuffer: null,
     audioContext: null,
     offlineContext: null,
     source: null,
@@ -39,6 +40,17 @@ export function zappafiedApp() {
       this.resetData();
       this.audioFile = file;
       this.audioSrc = URL.createObjectURL(file);
+
+      // Read the array buffer immediately while the file permission is still valid.
+      // On Android, file references from the recorder can become unreadable after a delay.
+      try {
+        this.audioArrayBuffer = await file.arrayBuffer();
+      } catch (error) {
+        console.error('Error reading audio file:', error);
+        alert('Analysis failed: ' + error.message);
+        return;
+      }
+
       this.isReady = true;
 
       try {
@@ -54,6 +66,7 @@ export function zappafiedApp() {
       this.isAnalyzed = false;
       this.decodedAudioBuffer = null;
       this.audioFile = null;
+      this.audioArrayBuffer = null;
 
       if (this.renderedSrc) {
         URL.revokeObjectURL(this.renderedSrc);
@@ -107,11 +120,13 @@ export function zappafiedApp() {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
-        // Read audio data directly from the File object to avoid blob URL fetch issues on mobile
+        // Use the eagerly-read buffer from handleFileUpload.
+        // On Android, file references from the recorder become unreadable after a delay,
+        // so we read the data immediately when the file is selected.
         this.analysisProgress = 10;
         this.analysisStage = 'Loading audio...';
 
-        const arrayBuffer = await this.audioFile.arrayBuffer();
+        const arrayBuffer = this.audioArrayBuffer;
         if (!arrayBuffer || arrayBuffer.byteLength === 0) {
           throw new Error('Empty audio buffer received');
         }
@@ -120,7 +135,9 @@ export function zappafiedApp() {
         this.analysisStage = 'Decoding audio...';
 
         const tempContext = new AudioContext();
-        const audioBuffer = await tempContext.decodeAudioData(arrayBuffer);
+        // slice(0) creates a copy — decodeAudioData transfers (detaches) its argument,
+        // which would leave audioArrayBuffer empty for any subsequent analysis run.
+        const audioBuffer = await tempContext.decodeAudioData(arrayBuffer.slice(0));
         await tempContext.close();
 
         // Store for later mixing
