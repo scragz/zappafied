@@ -257,16 +257,22 @@ export function zappafiedApp() {
         Tone.Transport.stop();
         Tone.Transport.cancel();
 
-        // Create synth if needed
-        if (!this.currentSynth) {
-          const synthType = parseInt(this.midiInstrument);
-          if (synthType >= 9 && synthType <= 16) {
-            this.currentSynth = new Tone.PolySynth(Tone.MetalSynth).toDestination();
-          } else {
-            this.currentSynth = new Tone.PolySynth(Tone.Synth, {
-              envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 }
-            }).toDestination();
-          }
+        // Dispose existing synth to avoid InvalidStateError from stale audio nodes
+        if (this.currentSynth) {
+          const oldSynth = this.currentSynth;
+          this.currentSynth = null;
+          try { oldSynth.releaseAll(); } catch (e) {}
+          try { oldSynth.dispose(); } catch (e) {}
+        }
+
+        // Create fresh synth with clean audio nodes
+        const synthType = parseInt(this.midiInstrument);
+        if (synthType >= 9 && synthType <= 16) {
+          this.currentSynth = new Tone.PolySynth(Tone.MetalSynth).toDestination();
+        } else {
+          this.currentSynth = new Tone.PolySynth(Tone.Synth, {
+            envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 }
+          }).toDestination();
         }
 
         // Capture synth ref so callbacks can detect stale synths
