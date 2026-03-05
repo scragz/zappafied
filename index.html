@@ -59,11 +59,15 @@
       <div class="progress-bar"></div>
     </section>
 
+    <section x-show="isRendering">
+      <p>Rendering mixed audio...</p>
+      <div class="progress-bar"></div>
+    </section>
+
     <!-- Audio Playback -->
-    <section x-show="isAnalyzed">
+    <section x-show="isAnalyzed && !isRendering">
       <h2>Playback</h2>
       <audio id="audioPlayer" controls></audio>
-      <p class="help-text">Press play to hear the audio with synchronized MIDI playback</p>
     </section>
 
     <!-- Visualization -->
@@ -72,32 +76,9 @@
       <canvas id="visualizationCanvas" class="visualization"></canvas>
     </section>
 
-    <!-- MIDI Playback and Export -->
-    <section x-show="isAnalyzed && midiData.length">
+    <!-- MIDI Export -->
+    <section x-show="isAnalyzed && midiData.length && !isRendering">
       <button @click="exportMIDI" aria-label="Export MIDI">Export MIDI</button>
-    </section>
-
-    <!-- Notes Editor -->
-    <section x-show="isAnalyzed && midiData.length">
-      <h2>Edit Detected Notes</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Note</th>
-            <th>Time (s)</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="(note, index) in midiData" :key="index">
-            <tr>
-              <td :data-note="note.note" x-text="note.note"></td>
-              <td x-text="note.time.toFixed(2)"></td>
-              <td><button @click="deleteNote(index)">Delete</button></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
     </section>
   </main>
   <!-- Your Main JavaScript -->
