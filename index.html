@@ -51,17 +51,23 @@
           </select>
         </div>
       </div>
-      <button @click="startAnalysis" class="primary" x-text="isAnalyzed ? 'Reanalyze Audio' : 'Analyze Audio'"></button>
+      <button @click="startAnalysis" class="primary"
+              :disabled="isProcessing"
+              x-text="isProcessing ? analysisStage : (isAnalyzed ? 'Reanalyze Audio' : 'Analyze Audio')"></button>
     </section>
 
     <section x-show="isProcessing">
-      <p>Analyzing audio...</p>
-      <div class="progress-bar"></div>
+      <p x-text="analysisStage || 'Analyzing audio...'"></p>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" :style="'width: ' + analysisProgress + '%'"></div>
+      </div>
     </section>
 
     <section x-show="isRendering">
-      <p>Rendering mixed audio...</p>
-      <div class="progress-bar"></div>
+      <p x-text="renderStage || 'Rendering mixed audio...'"></p>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" :style="'width: ' + renderProgress + '%'"></div>
+      </div>
     </section>
 
     <!-- Audio Playback -->
