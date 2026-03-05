@@ -222,8 +222,9 @@ export function zappafiedApp() {
         this.analysisStage = 'Generating MIDI...';
 
         this.features = features.sort((a, b) => a.time - b.time);
+        const maxRms = Math.max(...this.features.map(f => f.rms), 1e-6);
         this.features.forEach(feature => {
-          this.generateMIDI(feature.pitch, feature.time, feature.rms);
+          this.generateMIDI(feature.pitch, feature.time, feature.rms / maxRms);
         });
 
         console.log(`Generated ${this.midiData.length} MIDI notes`);
@@ -327,7 +328,7 @@ export function zappafiedApp() {
         }
 
         const synthGain = mixCtx.createGain();
-        synthGain.gain.value = 0.6;
+        synthGain.gain.value = 1.0;
         synthSource.buffer = synthMono;
         synthSource.connect(synthGain);
         synthGain.connect(mixCtx.destination);
