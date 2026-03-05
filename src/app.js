@@ -135,7 +135,9 @@ export function zappafiedApp() {
         this.analysisStage = 'Decoding audio...';
 
         const tempContext = new AudioContext();
-        const audioBuffer = await tempContext.decodeAudioData(arrayBuffer);
+        // slice(0) creates a copy — decodeAudioData transfers (detaches) its argument,
+        // which would leave audioArrayBuffer empty for any subsequent analysis run.
+        const audioBuffer = await tempContext.decodeAudioData(arrayBuffer.slice(0));
         await tempContext.close();
 
         // Store for later mixing
