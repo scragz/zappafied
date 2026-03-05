@@ -1,0 +1,106 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en" x-data="zappafiedApp()">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zappafied</title>
+  <link rel="stylesheet" href="./src/styles.scss">
+</head>
+<body>
+  <main class="container">
+    <h1><img src="./src/assets/logo.png" alt="Zappafied Logo" class="logo"></h1>
+
+    <!-- File Upload -->
+    <section>
+      <label for="fileInput">Upload Vocal Audio:</label>
+      <input type="file" id="fileInput" accept="audio/*" @change="handleFileUpload" aria-label="Upload Vocal Audio">
+    </section>
+
+    <!-- Analysis Controls -->
+    <section x-show="isReady">
+      <h2>Analysis Settings</h2>
+      <div class="controls-grid">
+        <div class="control-group">
+          <label for="quantizeLevel">Note Quantization:</label>
+          <select id="quantizeLevel" x-model="quantizeLevel">
+            <option value="0">None</option>
+            <option value="8">1/8 Note</option>
+            <option value="16">1/16 Note</option>
+            <option value="32">1/32 Note</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label for="pitchSmoothing">Pitch Smoothing:</label>
+          <input type="range" id="pitchSmoothing"
+                 x-model.number="pitchSmoothing"
+                 min="0" max="100" step="10">
+          <span x-text="pitchSmoothing + '%'"></span>
+        </div>
+
+        <div class="control-group">
+          <label for="midiInstrument">MIDI Instrument:</label>
+          <select id="midiInstrument" x-model="midiInstrument">
+            <option value="1">Acoustic Piano</option>
+            <option value="11">Vibraphone</option>
+            <option value="25">Acoustic Guitar</option>
+            <option value="41">Violin</option>
+            <option value="57">Trumpet</option>
+            <option value="74">Flute</option>
+          </select>
+        </div>
+      </div>
+      <button @click="startAnalysis" class="primary" x-text="isAnalyzed ? 'Reanalyze Audio' : 'Analyze Audio'"></button>
+    </section>
+
+    <section x-show="isProcessing">
+      <p>Analyzing audio...</p>
+      <div class="progress-bar"></div>
+    </section>
+
+    <!-- Audio Playback -->
+    <section x-show="isAnalyzed">
+      <h2>Playback</h2>
+      <audio id="audioPlayer" controls></audio>
+      <p class="help-text">Press play to hear the audio with synchronized MIDI playback</p>
+    </section>
+
+    <!-- Visualization -->
+    <section x-show="isAnalyzed && features.length">
+      <h2>Detected Notes and Rhythm</h2>
+      <canvas id="visualizationCanvas" class="visualization"></canvas>
+    </section>
+
+    <!-- MIDI Playback and Export -->
+    <section x-show="isAnalyzed && midiData.length">
+      <button @click="exportMIDI" aria-label="Export MIDI">Export MIDI</button>
+    </section>
+
+    <!-- Notes Editor -->
+    <section x-show="isAnalyzed && midiData.length">
+      <h2>Edit Detected Notes</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Note</th>
+            <th>Time (s)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="(note, index) in midiData" :key="index">
+            <tr>
+              <td :data-note="note.note" x-text="note.note"></td>
+              <td x-text="note.time.toFixed(2)"></td>
+              <td><button @click="deleteNote(index)">Delete</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </section>
+  </main>
+  <!-- Your Main JavaScript -->
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

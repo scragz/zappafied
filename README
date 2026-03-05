@@ -1,0 +1,131 @@
+# Zappafied
+
+Zappafied is a powerful, browser-based tool designed to transform your vocal audio recordings into interactive musical scores. By analyzing uploaded vocal tracks, Zappafied extracts notes and rhythms, allowing users to visualize and play alongside the generated MIDI sequences. Whether you're a musician looking to transcribe vocals, a music educator aiming to demonstrate pitch and rhythm, or an enthusiast eager to explore audio analysis, Zappafied offers an intuitive and seamless experience.
+
+## Table of Contents
+
+- [Zappafied](#zappafied)
+  - [Table of Contents](#table-of-contents)
+  - [Features](#features)
+  - [How It Works](#how-it-works)
+  - [Live Demo](#live-demo)
+  - [Screenshots](#screenshots)
+    - [Upload and Analyze](#upload-and-analyze)
+    - [Visualization](#visualization)
+    - [MIDI Playback and Export](#midi-playback-and-export)
+  - [Technologies Used](#technologies-used)
+  - [Usage Guide](#usage-guide)
+    - [Uploading Audio](#uploading-audio)
+    - [Playing Back Audio](#playing-back-audio)
+    - [Viewing Visualization](#viewing-visualization)
+    - [MIDI Playback](#midi-playback)
+    - [Editing Detected Notes](#editing-detected-notes)
+    - [Exporting MIDI](#exporting-midi)
+  - [Limitations](#limitations)
+  - [Future Enhancements](#future-enhancements)
+
+## Features
+
+- **Audio Upload**: Easily upload vocal audio files in various formats (`.wav`, `.mp3`, etc.).
+- **Real-Time Audio Analysis**: Utilize the power of Meyda to extract pitch and rhythm features from your audio.
+- **Interactive Visualization**: View detected notes and rhythms plotted on a dynamic timeline.
+- **MIDI Playback**: Listen to the generated MIDI sequence that mirrors your original vocal performance.
+- **Note Editing**: Refine the extracted notes by deleting or adjusting them for greater accuracy.
+- **MIDI Export**: Download your MIDI sequences for use in other applications or for further musical exploration.
+- **Responsive Design**: Enjoy a seamless experience across desktop and mobile devices with a clean, minimalist interface powered by Pico.css.
+- **Live Development**: Benefit from instant feedback and hot-reloading during development with Vite's powerful bundler and dev server.
+
+## How It Works
+
+Zappafied leverages modern web technologies to analyze and transform vocal audio into musical notes and rhythms:
+
+1. **Audio Upload**: Users upload their vocal recordings through an intuitive interface.
+2. **Audio Processing**: The Web Audio API processes the uploaded file, and Meyda extracts relevant audio features such as pitch and rhythm.
+3. **Data Visualization**: Extracted features are visualized on a canvas, providing a clear representation of the detected notes and rhythms.
+4. **MIDI Generation**: The application converts the analyzed data into MIDI format, allowing users to play back the sequence.
+5. **User Interaction**: Users can edit the detected notes to correct inaccuracies and export the refined MIDI file for personal use.
+
+## Live Demo
+
+Experience Zappafied in action! [Visit the Live Demo](https://zappafied.example.com)
+
+*Note: Replace the URL with the actual deployed link once available.*
+
+## Screenshots
+
+### Upload and Analyze
+
+![Upload and Analyze](./assets/upload-analyze.png)
+
+### Visualization
+
+![Visualization](./assets/visualization.png)
+
+### MIDI Playback and Export
+
+![MIDI Playback](./assets/midi-playback.png)
+
+## Technologies Used
+
+Zappafied is built using a modern tech stack to ensure performance, scalability, and a seamless user experience:
+
+- **Alpine.js**: A lightweight JavaScript framework for enhancing user interfaces with minimal overhead.
+- **Meyda**: A robust audio feature extraction library used for analyzing pitch, RMS, and chroma from audio signals.
+- **Tone.js**: A powerful framework for creating interactive music in the browser, utilized for MIDI playback.
+- **MidiWriterJS**: Enables the generation and export of MIDI files directly within the browser.
+- **Pico.css**: A minimalistic and responsive CSS framework that provides a clean and modern design.
+- **Vite**: A fast bundler and development server that offers instant module hot-reloading for an efficient development workflow.
+- **Sass (SCSS)**: Enhances CSS with powerful features like variables, nesting, and mixins for more maintainable stylesheets.
+
+## Usage Guide
+
+### Uploading Audio
+
+1. **Navigate to the Upload Section**: On the main interface, locate the "Upload Vocal Audio" section.
+2. **Select Your Audio File**: Click the file input to browse and select your desired audio file (`.wav`, `.mp3`, etc.).
+3. **Start Analysis**: Once uploaded, the application begins processing your audio to extract notes and rhythms.
+
+### Playing Back Audio
+
+1. **Audio Controls**: After uploading, an audio player appears with standard playback controls.
+2. **Listen to Original**: Use the play, pause, and seek functionalities to listen to your original vocal recording.
+
+### Viewing Visualization
+
+1. **Visualization Canvas**: Below the audio player, a dynamic canvas displays the detected notes and rhythms.
+2. **Interactive Elements**: Each detected note is plotted based on its pitch and timing, providing a visual representation of the audio.
+
+### MIDI Playback
+
+1. **Play MIDI Button**: Once the MIDI data is generated, a "Play MIDI" button becomes available.
+2. **Synchronize Playback**: Click the button to hear the MIDI sequence that corresponds to your original vocal track.
+
+### Editing Detected Notes
+
+1. **Notes Editor**: A table lists all the detected MIDI notes along with their corresponding times.
+2. **Delete Unwanted Notes**: Use the "Delete" button next to each note to remove inaccuracies or unwanted detections.
+3. **Dynamic Updates**: The visualization updates in real-time to reflect any changes made to the notes.
+
+### Exporting MIDI
+
+1. **Export MIDI Button**: After refining your notes, click the "Export MIDI" button to download the generated MIDI file.
+2. **Download and Use**: Save the `.mid` file to your device for use in other music applications or for sharing.
+
+## Limitations
+
+While Zappafied offers robust functionalities, it's essential to be aware of its current limitations:
+
+- **Monophonic Audio**: The tool is optimized for monophonic vocal recordings. Polyphonic audio (multiple simultaneous notes) may result in less accurate detections.
+- **Background Noise**: High levels of background noise can affect the accuracy of pitch and rhythm extraction. A quiet recording environment is recommended for optimal results.
+- **MIDI Timing Precision**: The timing of MIDI notes is based on detected feature extraction, which may not perfectly align with the original audio's timing nuances.
+
+## Future Enhancements
+
+Zappafied is continuously evolving. Planned improvements include:
+
+- **Polyphonic Audio Support**: Implement advanced algorithms to accurately detect multiple simultaneous notes in polyphonic recordings.
+- **Enhanced Visualization**: Introduce more sophisticated visual elements, such as piano rolls or interactive timelines.
+- **Real-Time Analysis**: Enable real-time pitch and rhythm detection as users record or stream audio.
+- **Voice Separation**: Incorporate machine learning models to separate vocals from background instruments for clearer analysis.
+- **User Customization**: Allow users to adjust settings like buffer size, noise thresholds, and visualization styles to tailor the experience.
+- **Advanced Editing**: Provide functionalities to modify note pitch and timing directly within the editor for more precise adjustments.
