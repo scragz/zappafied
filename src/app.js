@@ -14,7 +14,6 @@ export function zappafiedApp() {
     isReady: false,
     isAnalyzed: false,
     noiseThreshold: 0.02,
-    synth: null,
     quantizeLevel: "16",
     pitchSmoothing: 50,
     midiInstrument: "1",
@@ -55,11 +54,6 @@ export function zappafiedApp() {
       if (this.offlineContext) {
         this.offlineContext = null;
       }
-      if (this.synth) {
-        this.synth.dispose();
-        this.synth = null;
-      }
-
       const canvas = document.getElementById('visualizationCanvas');
       if (canvas) {
         const ctx = canvas.getContext('2d');
@@ -83,20 +77,14 @@ export function zappafiedApp() {
         // Stop Tone.js and cleanup synth
         try {
           const Tone = await getTone();
-          // Cancel all scheduled events
-          Tone.Transport.cancel();
           Tone.Transport.stop();
+          Tone.Transport.cancel();
 
-          // Clean up current synth if it exists
           if (this.currentSynth) {
-            try {
-              this.currentSynth.triggerRelease();
-              await new Promise(resolve => setTimeout(resolve, 100)); // Give time for release
-              this.currentSynth.dispose();
-              this.currentSynth = null;
-            } catch (synthError) {
-              console.warn('Error cleaning up synth:', synthError);
-            }
+            const synth = this.currentSynth;
+            this.currentSynth = null;
+            try { synth.releaseAll(); } catch (e) {}
+            try { synth.dispose(); } catch (e) {}
           }
         } catch (error) {
           console.warn('Error stopping Tone.js:', error);
@@ -249,116 +237,94 @@ export function zappafiedApp() {
       const newAudioPlayer = audioPlayer.cloneNode(true);
       audioPlayer.parentNode.replaceChild(newAudioPlayer, audioPlayer);
 
-      let isPlaying = false;
+      const disposeSynth = async () => {
+        const Tone = await getTone();
+        Tone.Transport.stop();
+        Tone.Transport.cancel();
+        if (this.currentSynth) {
+          const synth = this.currentSynth;
+          this.currentSynth = null;
+          try { synth.releaseAll(); } catch (e) {}
+          try { synth.dispose(); } catch (e) {}
+        }
+      };
+
+      const scheduleNotes = async (startFromTime) => {
+        const Tone = await getTone();
+        await Tone.start();
+
+        // Cancel any previously scheduled Transport events
+        Tone.Transport.stop();
+        Tone.Transport.cancel();
+
+        // Create synth if needed
+        if (!this.currentSynth) {
+          const synthType = parseInt(this.midiInstrument);
+          if (synthType >= 9 && synthType <= 16) {
+            this.currentSynth = new Tone.PolySynth(Tone.MetalSynth).toDestination();
+          } else {
+            this.currentSynth = new Tone.PolySynth(Tone.Synth, {
+              envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 }
+            }).toDestination();
+          }
+        }
+
+        // Capture synth ref so callbacks can detect stale synths
+        const synth = this.currentSynth;
+
+        this.midiData.forEach(event => {
+          if (event.time >= startFromTime) {
+            Tone.Transport.scheduleOnce((time) => {
+              if (synth === this.currentSynth && this.currentSynth) {
+                try {
+                  this.currentSynth.triggerAttackRelease(
+                    Tone.Frequency(event.note, "midi").toFrequency(),
+                    "8n",
+                    time,
+                    event.velocity ? event.velocity / 127 : 0.7
+                  );
+                } catch (e) {
+                  console.warn('Error playing note:', event.note, e);
+                }
+              }
+            }, event.time - startFromTime);
+          }
+        });
+
+        Tone.Transport.start();
+      };
 
       newAudioPlayer.addEventListener('play', async () => {
         try {
-          const Tone = await getTone();
-
-          // Ensure context is ready and resume it
-          await Tone.start();
-          if (Tone.context.state !== 'running') {
-            await Tone.context.resume();
-          }
-          await new Promise(resolve => setTimeout(resolve, 200)); // Give more time for context to stabilize
-
-          // Clean up existing synth if any
-          if (this.currentSynth) {
-            try {
-              this.currentSynth.triggerRelease();
-              await new Promise(resolve => setTimeout(resolve, 100));
-              this.currentSynth.dispose();
-              this.currentSynth = null;
-            } catch (error) {
-              console.warn('Error cleaning up synth:', error);
-            }
-          }
-
-          // Create new synth with selected instrument
-          const synthType = parseInt(this.midiInstrument);
-          try {
-            if (synthType >= 1 && synthType <= 8) {
-              this.currentSynth = new Tone.PolySynth(Tone.Synth, {
-                envelope: {
-                  attack: 0.005,
-                  decay: 0.1,
-                  sustain: 0.3,
-                  release: 0.1
-                }
-              }).toDestination();
-            } else if (synthType >= 9 && synthType <= 16) {
-              this.currentSynth = new Tone.PolySynth(Tone.MetalSynth).toDestination();
-            } else {
-              this.currentSynth = new Tone.PolySynth(Tone.Synth).toDestination();
-            }
-
-            // Wait for synth to be ready
-            await new Promise(resolve => setTimeout(resolve, 200));
-
-            isPlaying = true;
-            const audioStartTime = newAudioPlayer.currentTime;
-            const toneStartTime = Tone.now();
-
-            // Schedule notes
-            this.midiData.forEach(event => {
-              if (event.time >= audioStartTime && isPlaying) {
-                const scheduleTime = toneStartTime + (event.time - audioStartTime);
-                try {
-                  const midiNote = Tone.Frequency(event.note, "midi");
-                  this.currentSynth.triggerAttackRelease(
-                    midiNote,
-                    "8n",
-                    scheduleTime,
-                    event.velocity ? event.velocity / 127 : 0.7
-                  );
-                } catch (noteError) {
-                  console.warn('Error playing note:', event.note, noteError);
-                }
-              }
-            });
-          } catch (synthError) {
-            console.error('Error creating synth:', synthError);
-          }
+          await scheduleNotes(newAudioPlayer.currentTime);
         } catch (error) {
           console.error('Error during MIDI playback:', error);
         }
       });
 
-      newAudioPlayer.addEventListener('pause', () => {
-        isPlaying = false;
-        if (this.currentSynth) {
+      newAudioPlayer.addEventListener('pause', async () => {
+        try {
+          const Tone = await getTone();
+          Tone.Transport.pause();
+          if (this.currentSynth) {
+            try { this.currentSynth.releaseAll(); } catch (e) {}
+          }
+        } catch (e) {}
+      });
+
+      newAudioPlayer.addEventListener('seeked', async () => {
+        if (!newAudioPlayer.paused) {
           try {
-            this.currentSynth.releaseAll();
+            await scheduleNotes(newAudioPlayer.currentTime);
           } catch (error) {
-            console.warn('Error stopping synth:', error);
+            console.error('Error rescheduling after seek:', error);
           }
         }
       });
 
-      newAudioPlayer.addEventListener('ended', () => {
-        isPlaying = false;
-        if (this.currentSynth) {
-          try {
-            this.currentSynth.releaseAll();
-            this.currentSynth.dispose();
-            this.currentSynth = null;
-          } catch (error) {
-            console.warn('Error cleaning up synth:', error);
-          }
-        }
-      });
+      newAudioPlayer.addEventListener('ended', () => { disposeSynth(); });
 
-      // Clean up on page unload
-      window.addEventListener('beforeunload', () => {
-        if (this.currentSynth) {
-          try {
-            this.currentSynth.releaseAll();
-            this.currentSynth.dispose();
-          } catch (error) {
-            console.warn('Error cleaning up synth:', error);
-          }
-        }
-      });
+      window.addEventListener('beforeunload', () => { disposeSynth(); });
     },
 
     calculatePitch(spectrum, sampleRate) {
@@ -627,7 +593,9 @@ export function zappafiedApp() {
 
       const quarterNote = 60 / 120; // Assuming 120 BPM
       const division = parseInt(this.quantizeLevel);
-      const gridSize = quarterNote / division;
+      // division is the note denominator (8 = 1/8 note, 16 = 1/16 note, etc.)
+      // 1/8 note = quarterNote/2, 1/16 = quarterNote/4, 1/32 = quarterNote/8
+      const gridSize = (4 * quarterNote) / division;
 
       return Math.round(time / gridSize) * gridSize;
     }
