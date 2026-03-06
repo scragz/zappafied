@@ -279,7 +279,44 @@ export function zappafiedApp() {
         const synthToneBuffer = await Tone.Offline(({ transport }) => {
           let synth;
           if (instrument >= 9 && instrument <= 16) {
+            // Percussion / drums
             synth = new Tone.PolySynth(Tone.MetalSynth).toDestination();
+          } else if (instrument === 1) {
+            // Acoustic Piano — bright triangle, piano-like decay
+            synth = new Tone.PolySynth(Tone.Synth, {
+              oscillator: { type: 'triangle' },
+              envelope: { attack: 0.005, decay: 0.8, sustain: 0.2, release: 1.0 }
+            }).toDestination();
+          } else if (instrument === 11) {
+            // Vibraphone — sine with long bell-like ring
+            synth = new Tone.PolySynth(Tone.Synth, {
+              oscillator: { type: 'sine' },
+              envelope: { attack: 0.001, decay: 1.5, sustain: 0.05, release: 1.2 }
+            }).toDestination();
+          } else if (instrument === 25) {
+            // Acoustic Guitar — triangle with sharp pluck decay
+            synth = new Tone.PolySynth(Tone.Synth, {
+              oscillator: { type: 'triangle' },
+              envelope: { attack: 0.001, decay: 0.35, sustain: 0.08, release: 0.4 }
+            }).toDestination();
+          } else if (instrument === 41) {
+            // Violin — sawtooth with slow bowed attack, high sustain
+            synth = new Tone.PolySynth(Tone.Synth, {
+              oscillator: { type: 'sawtooth' },
+              envelope: { attack: 0.12, decay: 0.1, sustain: 0.85, release: 0.6 }
+            }).toDestination();
+          } else if (instrument === 57) {
+            // Trumpet — sawtooth, punchy attack, bright sustain
+            synth = new Tone.PolySynth(Tone.Synth, {
+              oscillator: { type: 'sawtooth' },
+              envelope: { attack: 0.02, decay: 0.05, sustain: 0.9, release: 0.2 }
+            }).toDestination();
+          } else if (instrument === 74) {
+            // Flute — sine, airy soft attack, smooth sustain
+            synth = new Tone.PolySynth(Tone.Synth, {
+              oscillator: { type: 'sine' },
+              envelope: { attack: 0.08, decay: 0.05, sustain: 0.92, release: 0.4 }
+            }).toDestination();
           } else {
             synth = new Tone.PolySynth(Tone.Synth, {
               envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 0.1 }
