@@ -40,6 +40,14 @@
         </div>
 
         <div class="control-group">
+          <label for="noteSmoothing">Note Smoothing:</label>
+          <input type="range" id="noteSmoothing"
+                 x-model.number="noteSmoothing"
+                 min="0" max="100" step="10">
+          <span x-text="noteSmoothing + '%'"></span>
+        </div>
+
+        <div class="control-group">
           <label for="midiInstrument">MIDI Instrument:</label>
           <select id="midiInstrument" x-model="midiInstrument">
             <option value="1">Acoustic Piano</option>
