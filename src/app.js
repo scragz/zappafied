@@ -147,23 +147,35 @@ export function zappafiedApp() {
         this.analysisStage = 'Extracting pitch features...';
 
         const bufferSize = 2048;
+        // Overlapping frames: 512-sample hop ≈ 11.6 ms at 44100 Hz, giving 4× better
+        // time resolution than non-overlapping 2048-sample blocks (~46 ms).
+        const hopSize = 512;
         const sampleRate = audioBuffer.sampleRate;
         const totalSamples = audioBuffer.length;
         const channelData = new Float32Array(audioBuffer.length);
         audioBuffer.copyFromChannel(channelData, 0);
 
         let features = [];
-        const totalChunks = Math.ceil(totalSamples / bufferSize);
-        let chunkIndex = 0;
-        const yieldEvery = Math.max(1, Math.floor(totalChunks / 20));
+        const totalHops = Math.ceil(totalSamples / hopSize);
+        let hopIndex = 0;
+        const yieldEvery = Math.max(1, Math.floor(totalHops / 20));
 
-        for (let startSample = 0; startSample < totalSamples; startSample += bufferSize) {
-          const endSample = Math.min(startSample + bufferSize, totalSamples);
-          const chunkSize = Math.pow(2, Math.floor(Math.log2(endSample - startSample)));
-          if (chunkSize < 64) continue;
+        // Spectral flux onset detection state
+        let prevSpectrum = null;
+        const fluxHistory = [];
+        const FLUX_WINDOW = 10;
+        const ONSET_FLUX_RATIO = 1.5; // flux must exceed 1.5× local average to count as onset
+
+        for (let startSample = 0; startSample < totalSamples; startSample += hopSize) {
+          const remaining = totalSamples - startSample;
+          if (remaining < 64) break;
+          // Use full bufferSize when available; power-of-2 fallback near EOF.
+          const chunkSize = remaining >= bufferSize
+            ? bufferSize
+            : Math.pow(2, Math.floor(Math.log2(remaining)));
+          if (chunkSize < 64) break;
 
           const chunk = channelData.slice(startSample, startSample + chunkSize);
-          if (chunk.length === 0) continue;
 
           try {
             const featureData = Meyda.extract(
@@ -172,24 +184,55 @@ export function zappafiedApp() {
               sampleRate
             );
 
-            if (featureData && featureData.rms > this.noiseThreshold) {
-              const frequency = this.calculatePitch(featureData.amplitudeSpectrum, sampleRate);
-              if (frequency > 0) {
-                features.push({
-                  pitch: frequency,
-                  time: startSample / sampleRate,
-                  rms: featureData.rms
-                });
+            if (featureData && featureData.amplitudeSpectrum) {
+              const spectrum = featureData.amplitudeSpectrum;
+              const rms = featureData.rms;
+
+              // Half-wave rectified spectral flux: sum positive spectral differences.
+              // This peaks sharply at note onsets, catching attacks before RMS rises.
+              let flux = 0;
+              if (prevSpectrum) {
+                const len = Math.min(spectrum.length, prevSpectrum.length);
+                for (let i = 0; i < len; i++) {
+                  const diff = spectrum[i] - prevSpectrum[i];
+                  if (diff > 0) flux += diff;
+                }
               }
+              fluxHistory.push(flux);
+              if (fluxHistory.length > FLUX_WINDOW) fluxHistory.shift();
+
+              // Local average of previous frames (exclude current)
+              const prevFluxes = fluxHistory.slice(0, -1);
+              const localAvg = prevFluxes.length > 0
+                ? prevFluxes.reduce((a, b) => a + b, 0) / prevFluxes.length
+                : 0;
+              const isOnset = prevSpectrum !== null
+                && rms > this.noiseThreshold
+                && flux > localAvg * ONSET_FLUX_RATIO;
+
+              if (rms > this.noiseThreshold) {
+                const frequency = this.calculatePitch(spectrum, sampleRate);
+                if (frequency > 0) {
+                  features.push({
+                    pitch: frequency,
+                    time: startSample / sampleRate,
+                    rms,
+                    isOnset,
+                  });
+                }
+              }
+
+              // Save a copy — Meyda may reuse internal typed-array buffers.
+              prevSpectrum = new Float32Array(spectrum);
             }
           } catch (featureError) {
             console.warn('Error processing chunk at', startSample, featureError);
           }
 
-          chunkIndex++;
+          hopIndex++;
           // Yield to browser periodically so the progress bar actually updates
-          if (chunkIndex % yieldEvery === 0) {
-            this.analysisProgress = 35 + Math.round((chunkIndex / totalChunks) * 40);
+          if (hopIndex % yieldEvery === 0) {
+            this.analysisProgress = 35 + Math.round((hopIndex / totalHops) * 40);
             await new Promise(resolve => setTimeout(resolve, 0));
           }
         }
@@ -223,8 +266,17 @@ export function zappafiedApp() {
 
         this.features = features.sort((a, b) => a.time - b.time);
         const maxRms = Math.max(...this.features.map(f => f.rms), 1e-6);
-        this.features.forEach(feature => {
-          this.generateMIDI(feature.pitch, feature.time, feature.rms / maxRms);
+
+        // Group consecutive voiced frames into discrete note events so that each
+        // sung/played note produces exactly one MIDI event, timed at the onset
+        // frame rather than scattered across the note's duration.
+        const noteGroups = this._groupIntoNoteEvents(this.features);
+        noteGroups.forEach(group => {
+          // Median pitch across the group is more stable than any single frame.
+          const sorted = group.map(f => f.pitch).sort((a, b) => a - b);
+          const medianPitch = sorted[Math.floor(sorted.length / 2)];
+          const peakRms = Math.max(...group.map(f => f.rms));
+          this.generateMIDI(medianPitch, group[0].time, peakRms / maxRms);
         });
 
         console.log(`Generated ${this.midiData.length} MIDI notes`);
@@ -455,22 +507,80 @@ export function zappafiedApp() {
         if (!spectrum || spectrum.length === 0) return 0;
 
         const binSize = sampleRate / (spectrum.length * 2);
-        let maxIndex = 0;
-        let maxValue = 0;
+        const minBin = Math.max(1, Math.floor(80 / binSize));
+        const maxBin = Math.min(spectrum.length - 2, Math.ceil(1000 / binSize));
 
-        for (let i = 0; i < spectrum.length; i++) {
-          if (spectrum[i] > maxValue) {
-            maxValue = spectrum[i];
+        // Harmonic Product Spectrum: multiply spectrum by downsampled copies to
+        // reinforce the fundamental frequency over its harmonics.
+        let maxHps = 0;
+        let maxIndex = minBin;
+        for (let i = minBin; i <= maxBin; i++) {
+          const h2 = i * 2 < spectrum.length ? spectrum[i * 2] : 1;
+          const h3 = i * 3 < spectrum.length ? spectrum[i * 3] : 1;
+          const hps = spectrum[i] * h2 * h3;
+          if (hps > maxHps) {
+            maxHps = hps;
             maxIndex = i;
           }
         }
 
-        const frequency = maxIndex * binSize;
+        if (maxHps === 0) return 0;
+
+        // Parabolic interpolation around the peak for sub-bin frequency accuracy.
+        let interpolatedIndex = maxIndex;
+        if (maxIndex > minBin && maxIndex < spectrum.length - 1) {
+          const alpha = spectrum[maxIndex - 1];
+          const beta  = spectrum[maxIndex];
+          const gamma = spectrum[maxIndex + 1];
+          const denom = alpha - 2 * beta + gamma;
+          if (Math.abs(denom) > 1e-10) {
+            const offset = 0.5 * (alpha - gamma) / denom;
+            interpolatedIndex = maxIndex + Math.max(-0.5, Math.min(0.5, offset));
+          }
+        }
+
+        const frequency = interpolatedIndex * binSize;
         return (frequency >= 80 && frequency <= 1000) ? frequency : 0;
       } catch (error) {
         console.warn('Error calculating pitch:', error);
         return 0;
       }
+    },
+
+    // Group consecutive voiced frames into note events.
+    // A new group starts when:
+    //   • an onset is detected via spectral flux, OR
+    //   • there is a gap > 120 ms between frames (silence), OR
+    //   • pitch shifts by more than ~1.5 semitones relative to the group start.
+    _groupIntoNoteEvents(features) {
+      if (features.length === 0) return [];
+
+      const SEMITONE_1_5 = Math.pow(2, 1.5 / 12); // ≈ 1.091
+      const MAX_GAP_S = 0.12;
+
+      const groups = [];
+      let group = [features[0]];
+
+      for (let i = 1; i < features.length; i++) {
+        const f    = features[i];
+        const prev = features[i - 1];
+        const ratio = f.pitch / group[0].pitch;
+        const gap   = f.time - prev.time;
+
+        const newNote = f.isOnset
+          || gap > MAX_GAP_S
+          || ratio < 1 / SEMITONE_1_5
+          || ratio > SEMITONE_1_5;
+
+        if (newNote) {
+          groups.push(group);
+          group = [f];
+        } else {
+          group.push(f);
+        }
+      }
+      groups.push(group);
+      return groups;
     },
 
     generateMIDI(pitch, time, velocity) {
