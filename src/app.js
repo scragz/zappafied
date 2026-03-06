@@ -33,7 +33,9 @@ export function zappafiedApp() {
 
     async handleFileUpload(event) {
       const file = event.target.files[0];
-      if (!file || !file.type.startsWith('audio/')) {
+      const audioExtensions = /\.(mp3|wav|ogg|aac|m4a|flac|opus|webm|caf)$/i;
+      const isAudio = file && (file.type.startsWith('audio/') || file.type === 'video/quicktime' || (!file.type && audioExtensions.test(file.name)));
+      if (!isAudio) {
         alert('Please upload a valid audio file.');
         return;
       }
