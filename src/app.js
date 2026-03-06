@@ -19,6 +19,7 @@ export function zappafiedApp() {
     noiseThreshold: 0.02,
     quantizeLevel: "16",
     pitchSmoothing: 50,
+    noteSmoothing: 0,
     midiInstrument: "1",
     decodedAudioBuffer: null,
     renderedSrc: null,
@@ -271,7 +272,8 @@ export function zappafiedApp() {
         // sung/played note produces exactly one MIDI event, timed at the onset
         // frame rather than scattered across the note's duration.
         const noteGroups = this._groupIntoNoteEvents(this.features);
-        noteGroups.forEach(group => {
+        const smoothedGroups = this.smoothNotes(noteGroups);
+        smoothedGroups.forEach(group => {
           // Median pitch across the group is more stable than any single frame.
           const sorted = group.map(f => f.pitch).sort((a, b) => a - b);
           const medianPitch = sorted[Math.floor(sorted.length / 2)];
@@ -741,6 +743,44 @@ export function zappafiedApp() {
         console.error('Error exporting MIDI:', error);
         alert('An error occurred while exporting MIDI.');
       });
+    },
+
+    smoothNotes(noteGroups) {
+      if (this.noteSmoothing === 0) return noteGroups;
+
+      const smoothing = this.noteSmoothing / 100;
+
+      // Minimum frames a group must have — scales up to ~130 ms worth at 100%.
+      // Hop size is 512/44100 ≈ 11.6 ms, so 11 frames ≈ 128 ms.
+      const minFrames = Math.round(smoothing * 11);
+
+      // Pitch ratio window for merging adjacent groups.
+      // At 100 % smoothing, merge groups within 2 semitones of each other.
+      const mergeRatio = Math.pow(2, (smoothing * 2) / 12);
+
+      const groupMedian = g => {
+        const s = g.map(f => f.pitch).sort((a, b) => a - b);
+        return s[Math.floor(s.length / 2)];
+      };
+
+      // 1. Drop groups that are too short.
+      const filtered = noteGroups.filter(g => g.length >= Math.max(1, minFrames));
+      if (filtered.length === 0) return filtered;
+
+      // 2. Merge adjacent groups whose median pitches are close.
+      const merged = [filtered[0]];
+      for (let i = 1; i < filtered.length; i++) {
+        const prev = merged[merged.length - 1];
+        const curr = filtered[i];
+        const ratio = groupMedian(curr) / groupMedian(prev);
+        if (ratio >= 1 / mergeRatio && ratio <= mergeRatio) {
+          merged[merged.length - 1] = prev.concat(curr);
+        } else {
+          merged.push(curr);
+        }
+      }
+
+      return merged;
     },
 
     smoothPitch(pitches) {
